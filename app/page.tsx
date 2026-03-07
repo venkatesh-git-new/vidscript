@@ -12,7 +12,7 @@ export default function Home() {
   const [copied, setCopied] = useState(false);
 
   /**
-   * Extracts Video ID and coordinates the transcription flow.
+   * Unified transcription flow via backend.
    */
   const handleTranscribe = async () => {
     if (!url) return;
@@ -20,99 +20,39 @@ export default function Home() {
     setError("");
     setTranscript("");
 
-    try {
-      // 1. Extract Video ID
-      const videoIdRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/i;
-      const match = url.match(videoIdRegex);
-      const videoId = match ? match[1] : null;
+    const callApi = async () => {
+      try {
+        const response = await fetch("/api/transcribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        });
 
-      if (!videoId) {
-        throw new Error("Invalid YouTube URL format");
-      }
+        const data = await response.json();
 
-      // 2. Check Cache
-      const cacheResponse = await fetch(`/api/transcript?videoId=${videoId}`);
-      const cacheData = await cacheResponse.json();
+        if (data.status === "error") {
+          throw new Error(data.message || "Failed to fetch transcript");
+        }
 
-      if (cacheData.transcript) {
-        console.log("[VidScript] Serving from cache");
-        setTranscript(cacheData.transcript);
+        if (data.status === "pending") {
+          // Poll again after 5 seconds
+          setError("Transcription in progress (this might take a minute for AI)...");
+          setTimeout(callApi, 5000);
+          return;
+        }
+
+        if (data.status === "success") {
+          setTranscript(data.transcript);
+          setIsLoading(false);
+          setError("");
+        }
+      } catch (err: any) {
+        setError(err.message);
         setIsLoading(false);
-        return;
       }
+    };
 
-      // 3. Fetch from YouTube directly (Browser)
-      console.log("[VidScript] Fetching available tracks...");
-
-      const getBestTrack = (xml: string) => {
-        // Simple regex-based parsing of the XML track list
-        // Priority: en-US, en-GB, en, a.en
-        if (xml.includes('lang_code="en-US"')) return "en-US";
-        if (xml.includes('lang_code="en-GB"')) return "en-GB";
-        if (xml.includes('lang_code="en"')) return "en";
-        // Handle auto-generated English
-        if (xml.includes('lang_code="a.en"')) return "a.en";
-
-        // Fallback: search for any english lang code
-        const match = xml.match(/lang_code="(en[^"]*)"/);
-        return match ? match[1] : null;
-      };
-
-      const listResponse = await fetch(`https://www.youtube.com/api/timedtext?type=list&v=${videoId}`);
-      if (!listResponse.ok) throw new Error("Could not fetch caption list from YouTube.");
-
-      const listXml = await listResponse.text();
-      const selectedLang = getBestTrack(listXml);
-
-      if (!selectedLang) {
-        throw new Error("No English captions (manual or auto-generated) found for this video.");
-      }
-
-      console.log(`[VidScript] Fetching transcript for lang: ${selectedLang}`);
-      const ytResponse = await fetch(`https://www.youtube.com/api/timedtext?v=${videoId}&lang=${selectedLang}`);
-
-      if (!ytResponse.ok) {
-        throw new Error("Could not fetch the selected caption track.");
-      }
-
-      const xmlText = await ytResponse.text();
-      const parser = new DOMParser();
-      const xmlDoc = parser.parseFromString(xmlText, "text/xml");
-      const textNodes = xmlDoc.getElementsByTagName("text");
-
-      if (textNodes.length === 0) {
-        throw new Error("The selected caption track is empty.");
-      }
-
-      let fullTranscript = "";
-      for (let i = 0; i < textNodes.length; i++) {
-        // Decode HTML entities
-        const txt = textNodes[i].textContent || "";
-        fullTranscript += txt + " ";
-      }
-
-      const cleanedTranscript = fullTranscript
-        .replace(/\s+/g, " ")
-        .trim();
-
-      setTranscript(cleanedTranscript);
-
-      // 5. Store in Cache (Async/Background)
-      fetch("/api/transcript", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          videoId,
-          transcript: cleanedTranscript,
-          title: "" // Optional: can add title fetching later if needed
-        }),
-      }).catch(err => console.error("[VidScript] Caching failed:", err));
-
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setIsLoading(false);
-    }
+    callApi();
   };
 
   const handleCopy = () => {
