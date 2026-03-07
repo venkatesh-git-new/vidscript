@@ -1,6 +1,4 @@
-"use client";
-
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 interface AdBannerProps {
     dataAdSlot: string;
@@ -21,7 +19,10 @@ export default function AdBanner({
     dataFullWidthResponsive = true,
     className = "",
 }: AdBannerProps) {
+    const [isMounted, setIsMounted] = useState(false);
+
     useEffect(() => {
+        setIsMounted(true);
         try {
             (window.adsbygoogle = window.adsbygoogle || []).push({});
         } catch (e) {
@@ -30,15 +31,17 @@ export default function AdBanner({
     }, []);
 
     return (
-        <div className={`ad-container overflow-hidden ${className}`}>
-            <ins
-                className="adsbygoogle"
-                style={{ display: "block" }}
-                data-ad-client={process.env.NEXT_PUBLIC_ADSENSE_CLIENT_ID}
-                data-ad-slot={dataAdSlot}
-                data-ad-format={dataAdFormat}
-                data-full-width-responsive={dataFullWidthResponsive.toString()}
-            />
+        <div className={`ad-container overflow-hidden ${className}`} style={{ minHeight: "100px" }}>
+            {isMounted && (
+                <ins
+                    className="adsbygoogle"
+                    style={{ display: "block" }}
+                    data-ad-client={process.env.NEXT_PUBLIC_ADSENSE_CLIENT_ID}
+                    data-ad-slot={dataAdSlot}
+                    data-ad-format={dataAdFormat}
+                    data-full-width-responsive={dataFullWidthResponsive.toString()}
+                />
+            )}
         </div>
     );
 }
