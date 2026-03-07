@@ -11,6 +11,9 @@ export default function Home() {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
 
+  /**
+   * Extracts Video ID and coordinates the transcription flow.
+   */
   const handleTranscribe = async () => {
     if (!url) return;
     setIsLoading(true);
@@ -18,19 +21,69 @@ export default function Home() {
     setTranscript("");
 
     try {
-      const response = await fetch("/api/transcribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      });
+      // 1. Extract Video ID
+      const videoIdRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/i;
+      const match = url.match(videoIdRegex);
+      const videoId = match ? match[1] : null;
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to fetch transcript");
+      if (!videoId) {
+        throw new Error("Invalid YouTube URL format");
       }
 
-      setTranscript(data.transcript);
+      // 2. Check Cache
+      const cacheResponse = await fetch(`/api/transcript?videoId=${videoId}`);
+      const cacheData = await cacheResponse.json();
+
+      if (cacheData.transcript) {
+        console.log("[VidScript] Serving from cache");
+        setTranscript(cacheData.transcript);
+        setIsLoading(false);
+        return;
+      }
+
+      // 3. Fetch from YouTube directly (Browser)
+      console.log("[VidScript] Fetching from YouTube...");
+      const ytResponse = await fetch(`https://www.youtube.com/api/timedtext?v=${videoId}&lang=en`);
+
+      if (!ytResponse.ok) {
+        throw new Error("Could not fetch captions from YouTube. They might be disabled.");
+      }
+
+      const xmlText = await ytResponse.text();
+
+      // 4. Parse XML
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+      const textNodes = xmlDoc.getElementsByTagName("text");
+
+      if (textNodes.length === 0) {
+        throw new Error("No English captions found for this video.");
+      }
+
+      let fullTranscript = "";
+      for (let i = 0; i < textNodes.length; i++) {
+        // Decode HTML entities (e.g., &#39; to ')
+        const txt = textNodes[i].textContent || "";
+        fullTranscript += txt + " ";
+      }
+
+      const cleanedTranscript = fullTranscript
+        .replace(/\s+/g, " ")
+        .trim();
+
+      setTranscript(cleanedTranscript);
+
+      // 5. Store in Cache (Async/Background)
+      fetch("/api/transcript", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          videoId,
+          transcript: cleanedTranscript,
+          title: "" // Optional: can add title fetching later if needed
+        }),
+      }).catch(err => console.error("[VidScript] Caching failed:", err));
+
     } catch (err: any) {
       setError(err.message);
     } finally {
