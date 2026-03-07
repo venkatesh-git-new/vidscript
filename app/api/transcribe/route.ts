@@ -20,21 +20,28 @@ async function fetchWithYtDlp(videoId: string): Promise<string | null> {
     const url = `https://www.youtube.com/watch?v=${videoId}`;
     const timestamp = Date.now();
     const tempBase = `/tmp/sub_${videoId}_${timestamp}`;
-    const ytDlpPath = "/usr/local/bin/yt-dlp";
+
+    // Use /usr/local/bin/yt-dlp on Render (Docker), use 'yt-dlp' on local (PATH)
+    let ytDlpPath = "yt-dlp";
+    if (fs.existsSync("/usr/local/bin/yt-dlp")) {
+        ytDlpPath = "/usr/local/bin/yt-dlp";
+    }
 
     try {
-        console.log(`[Transcribe API] Running ${ytDlpPath} for ${videoId}...`);
+        console.log(`[Transcribe API] Using yt-dlp path: ${ytDlpPath}`);
 
-        // --sub-langs "en.*" catches en, en-US, en-GB etc.
-        const command = `${ytDlpPath} --write-subs --write-auto-subs --sub-langs "en.*" --sub-format "srt/vtt/best" --skip-download -o "${tempBase}" "${url}"`;
+        // Simplified command to match working test_ytdlp_sub.js
+        const command = `${ytDlpPath} --write-subs --write-auto-subs --sub-langs en --sub-format srt --skip-download -o "${tempBase}" "https://www.youtube.com/watch?v=${videoId}"`;
         console.log(`[Transcribe API] Executing: ${command}`);
 
-        execSync(command, { stdio: "pipe" });
+        // Capture stdout and stderr for better debugging
+        const out = execSync(command, { stdio: "pipe" }).toString();
+        console.log(`[Transcribe API] yt-dlp stdout: ${out}`);
 
-        // List matching files
+        // Matching files logic remains the same (more robust than just looking for .en.srt)
         const allTmpFiles = fs.readdirSync("/tmp");
         const matchingFiles = allTmpFiles.filter(f => f.startsWith(`sub_${videoId}_${timestamp}`));
-        console.log(`[Transcribe API] Files found: ${matchingFiles.join(", ")}`);
+        console.log(`[Transcribe API] Files found in /tmp: ${matchingFiles.join(", ")}`);
 
         // Find the best caption file
         const subFile = matchingFiles.find(f => f.endsWith(".srt") || f.endsWith(".vtt"));
