@@ -4,6 +4,8 @@ import { useState } from "react";
 import { Copy, Download, Loader2, Youtube, FileText, Check, AlertCircle } from "lucide-react";
 import AdBanner from "@/components/AdBanner";
 
+import { extractVideoId, getCaptionTracks, selectBestTrack, downloadTranscript } from "@/utils/youtube-browser";
+
 export default function Home() {
   const [url, setUrl] = useState("");
   const [transcript, setTranscript] = useState("");
@@ -12,7 +14,7 @@ export default function Home() {
   const [copied, setCopied] = useState(false);
 
   /**
-   * Unified transcription flow via backend.
+   * Browser-Side Transcription Flow
    */
   const handleTranscribe = async () => {
     if (!url) return;
@@ -20,39 +22,48 @@ export default function Home() {
     setError("");
     setTranscript("");
 
-    const callApi = async () => {
-      try {
-        const response = await fetch("/api/transcribe", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url }),
-        });
+    try {
+      // 1. Extract Video ID
+      const videoId = extractVideoId(url);
+      if (!videoId) throw new Error("Invalid YouTube URL");
 
-        const data = await response.json();
+      // 2. Check Cache
+      console.log("[VidScript] Checking cache...");
+      const cacheResponse = await fetch(`/api/transcript?videoId=${videoId}`);
+      const cacheData = await cacheResponse.json();
 
-        if (data.status === "error") {
-          throw new Error(data.message || "Failed to fetch transcript");
-        }
-
-        if (data.status === "pending") {
-          // Poll again after 5 seconds
-          setError("Transcription in progress (this might take a minute for AI)...");
-          setTimeout(callApi, 5000);
-          return;
-        }
-
-        if (data.status === "success") {
-          setTranscript(data.transcript);
-          setIsLoading(false);
-          setError("");
-        }
-      } catch (err: any) {
-        setError(err.message);
+      if (cacheData.status === "success" && cacheData.transcript) {
+        console.log("[VidScript] Serving from cache");
+        setTranscript(cacheData.transcript);
         setIsLoading(false);
+        return;
       }
-    };
 
-    callApi();
+      // 3. Fetch Caption Tracks from Browser
+      console.log("[VidScript] Fetching caption tracks...");
+      const tracks = await getCaptionTracks(videoId);
+
+      // 4. Select Best Track
+      const bestTrack = selectBestTrack(tracks);
+      console.log(`[VidScript] Selected track: ${bestTrack.languageCode}`);
+
+      // 5. Download and Parse
+      const text = await downloadTranscript(bestTrack.baseUrl);
+      setTranscript(text);
+
+      // 6. Cache in Backend (Background)
+      fetch("/api/cache-transcript", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoId, transcript: text }),
+      }).catch(err => console.error("[VidScript] Caching failed:", err));
+
+    } catch (err: any) {
+      console.error("[VidScript] Extraction failed:", err);
+      setError(err.message || "Failed to extract captions. They might be disabled or restricted.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleCopy = () => {
