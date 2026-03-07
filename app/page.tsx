@@ -42,38 +42,58 @@ export default function Home() {
       }
 
       // 3. Fetch from YouTube directly (Browser)
-      console.log("[VidScript] Fetching from YouTube...");
+      console.log("[VidScript] Fetching available tracks...");
 
-      const fetchCaptions = async (kind?: string) => {
-        const baseUrl = `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en`;
-        const url = kind ? `${baseUrl}&kind=${kind}` : baseUrl;
-        const response = await fetch(url);
-        if (!response.ok) return null;
+      const getBestTrack = (xml: string) => {
+        // Simple regex-based parsing of the XML track list
+        // Priority: en-US, en-GB, en, a.en
+        if (xml.includes('lang_code="en-US"')) return "en-US";
+        if (xml.includes('lang_code="en-GB"')) return "en-GB";
+        if (xml.includes('lang_code="en"')) return "en";
+        // Handle auto-generated English
+        if (xml.includes('lang_code="a.en"')) return "a.en";
 
-        const xmlText = await response.text();
-        const parser = new DOMParser();
-        const xmlDoc = parser.parseFromString(xmlText, "text/xml");
-        const textNodes = xmlDoc.getElementsByTagName("text");
-
-        if (textNodes.length === 0) return null;
-
-        let fullTranscript = "";
-        for (let i = 0; i < textNodes.length; i++) {
-          const txt = textNodes[i].textContent || "";
-          fullTranscript += txt + " ";
-        }
-        return fullTranscript.replace(/\s+/g, " ").trim();
+        // Fallback: search for any english lang code
+        const match = xml.match(/lang_code="(en[^"]*)"/);
+        return match ? match[1] : null;
       };
 
-      let cleanedTranscript = await fetchCaptions(); // Try standard
-      if (!cleanedTranscript) {
-        console.log("[VidScript] Standard captions not found, trying auto-generated...");
-        cleanedTranscript = await fetchCaptions("asr"); // Try auto-generated
-      }
+      const listResponse = await fetch(`https://www.youtube.com/api/timedtext?type=list&v=${videoId}`);
+      if (!listResponse.ok) throw new Error("Could not fetch caption list from YouTube.");
 
-      if (!cleanedTranscript) {
+      const listXml = await listResponse.text();
+      const selectedLang = getBestTrack(listXml);
+
+      if (!selectedLang) {
         throw new Error("No English captions (manual or auto-generated) found for this video.");
       }
+
+      console.log(`[VidScript] Fetching transcript for lang: ${selectedLang}`);
+      const ytResponse = await fetch(`https://www.youtube.com/api/timedtext?v=${videoId}&lang=${selectedLang}`);
+
+      if (!ytResponse.ok) {
+        throw new Error("Could not fetch the selected caption track.");
+      }
+
+      const xmlText = await ytResponse.text();
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+      const textNodes = xmlDoc.getElementsByTagName("text");
+
+      if (textNodes.length === 0) {
+        throw new Error("The selected caption track is empty.");
+      }
+
+      let fullTranscript = "";
+      for (let i = 0; i < textNodes.length; i++) {
+        // Decode HTML entities
+        const txt = textNodes[i].textContent || "";
+        fullTranscript += txt + " ";
+      }
+
+      const cleanedTranscript = fullTranscript
+        .replace(/\s+/g, " ")
+        .trim();
 
       setTranscript(cleanedTranscript);
 
