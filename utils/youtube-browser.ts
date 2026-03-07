@@ -38,17 +38,53 @@ function cleanXml(xml: string): string {
  * Parses caption tracks from raw HTML
  */
 function parseCaptionTracksFromHtml(html: string): CaptionTrack[] {
-    const regex = /ytInitialPlayerResponse\s*=\s*({.+?})\s*;/;
-    const match = html.match(regex);
-    if (!match) {
-        throw new Error("Could not find player response data. The video might be private or restricted.");
+    // YouTube uses different ways to embed this data. We try multiple regex patterns.
+    const patterns = [
+        /ytInitialPlayerResponse\s*=\s*({.+?})\s*;\s*(?:var|window|function)/, // Followed by code
+        /ytInitialPlayerResponse\s*=\s*({.+?})\s*;/,                         // Standard
+        /ytInitialPlayerResponse\s*=\s*({.+?})\s*(?:\n|<\/script>)/           // End of script tag
+    ];
+
+    let playerResponse: any = null;
+
+    for (const pattern of patterns) {
+        const match = html.match(pattern);
+        if (match) {
+            try {
+                playerResponse = JSON.parse(match[1]);
+                if (playerResponse.captions) break;
+            } catch (e) {
+                console.warn("[BrowserEngine] Regex match failed to parse as JSON:", match[1].substring(0, 100));
+            }
+        }
     }
 
-    const playerResponse = JSON.parse(match[1]);
+    if (!playerResponse) {
+        // Fallback: check ytInitialData (rarely contains full captions but worth a look)
+        const dataMatch = html.match(/ytInitialData\s*=\s*({.+?})\s*;/);
+        if (dataMatch) {
+            try {
+                const data = JSON.parse(dataMatch[1]);
+                // Sometimes captions are tucked away in playabilityStatus
+                playerResponse = data.playerResponse;
+            } catch (e) { }
+        }
+    }
+
+    if (!playerResponse) {
+        console.error("[BrowserEngine] Raw HTML Sample:", html.substring(0, 500));
+        throw new Error("Could not find player response data. The video might be private, restricted, or YouTube changed their page layout.");
+    }
+
     const tracks = playerResponse.captions?.playerCaptionsTracklistRenderer?.captionTracks;
 
     if (!tracks || tracks.length === 0) {
-        throw new Error("No captions found for this video.");
+        // One last check: maybe it's translated?
+        const translationTracks = playerResponse.captions?.playerCaptionsTracklistRenderer?.translationLanguages;
+        if (translationTracks && translationTracks.length > 0) {
+            throw new Error(`This video only has translated captions. Manual transcription might be required.`);
+        }
+        throw new Error("No captions found for this video. Use the AI Fallback (if implemented) or check the YouTube link.");
     }
 
     return tracks.map((t: any) => ({
