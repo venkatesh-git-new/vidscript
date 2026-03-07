@@ -69,18 +69,44 @@ function parseVtt(vttContent: string): string {
 }
 
 /**
+ * Helper to handle YouTube cookies from environment variable
+ */
+function getCookiesFlag(): { flag: string; cleanup: () => void } {
+    const cookiesBase64 = process.env.YOUTUBE_COOKIES_BASE64;
+    if (!cookiesBase64) return { flag: "", cleanup: () => { } };
+
+    try {
+        const tempDir = os.tmpdir();
+        const cookiePath = path.join(tempDir, `cookies_${Math.random().toString(36).slice(2)}.txt`);
+        const cookiesText = Buffer.from(cookiesBase64, "base64").toString("utf-8");
+        fs.writeFileSync(cookiePath, cookiesText);
+
+        return {
+            flag: `--cookies "${cookiePath}"`,
+            cleanup: () => {
+                if (fs.existsSync(cookiePath)) fs.unlinkSync(cookiePath);
+            }
+        };
+    } catch (e) {
+        console.error("[Cookies] Failed to decode YOUTUBE_COOKIES_BASE64:", e);
+        return { flag: "", cleanup: () => { } };
+    }
+}
+
+/**
  * Uses yt-dlp to extract subtitles as VTT
  */
 async function extractSubtitlesWithYtDlp(videoId: string): Promise<string | null> {
     const tempDir = os.tmpdir();
     const outputPath = path.join(tempDir, videoId);
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const { flag: cookiesFlag, cleanup: cleanupCookies } = getCookiesFlag();
 
     try {
         console.log(`[yt-dlp] Attempting to download subtitles for ${videoId}...`);
 
         // yt-dlp --skip-download --write-sub --write-auto-sub --sub-lang en --sub-format vtt --output "/tmp/VIDEO_ID"
-        await execPromise(`yt-dlp --skip-download --write-sub --write-auto-sub --sub-lang en --sub-format vtt --output "${outputPath}" "${videoUrl}"`);
+        await execPromise(`yt-dlp ${cookiesFlag} --skip-download --write-sub --write-auto-sub --sub-lang en --sub-format vtt --output "${outputPath}" "${videoUrl}"`);
 
         // Check for manual or auto VTT files
         const files = fs.readdirSync(tempDir);
@@ -99,7 +125,12 @@ async function extractSubtitlesWithYtDlp(videoId: string): Promise<string | null
         return null;
     } catch (e: any) {
         console.error(`[yt-dlp] Error for ${videoId}:`, e.message);
+        if (e.message.includes("bot") || e.message.includes("403") || e.message.includes("Sign in")) {
+            throw new Error("YouTube is blocking this server. Please add YOUTUBE_COOKIES_BASE64 to your Env variables.");
+        }
         return null;
+    } finally {
+        cleanupCookies();
     }
 }
 
@@ -110,10 +141,11 @@ async function transcribeWithAI(videoId: string): Promise<string> {
     const tempDir = os.tmpdir();
     const audioPath = path.join(tempDir, `audio_${videoId}.m4a`);
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const { flag: cookiesFlag, cleanup: cleanupCookies } = getCookiesFlag();
 
     try {
         console.log(`[AI] Downloading audio for ${videoId}...`);
-        await execPromise(`yt-dlp -f 'ba[ext=m4a]/ba' -o "${audioPath}" "${videoUrl}"`);
+        await execPromise(`yt-dlp ${cookiesFlag} -f 'ba[ext=m4a]/ba' -o "${audioPath}" "${videoUrl}"`);
 
         if (!fs.existsSync(audioPath)) {
             throw new Error("Audio download failed");
@@ -128,7 +160,13 @@ async function transcribeWithAI(videoId: string): Promise<string> {
         });
 
         return transcription.text;
+    } catch (e: any) {
+        if (e.message.includes("bot") || e.message.includes("403") || e.message.includes("Sign in")) {
+            throw new Error("YouTube is blocking this server. Please add YOUTUBE_COOKIES_BASE64 to your Env variables.");
+        }
+        throw e;
     } finally {
+        cleanupCookies();
         if (fs.existsSync(audioPath)) {
             fs.unlinkSync(audioPath);
         }
