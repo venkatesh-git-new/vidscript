@@ -1,5 +1,5 @@
 # Use official Node.js image
-FROM node:18-slim
+FROM node:20-slim
 
 # Install system dependencies: yt-dlp and ffmpeg
 RUN apt-get update && apt-get install -y \
