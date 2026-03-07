@@ -18,18 +18,11 @@ try {
     YoutubeTranscript = YoutubeTranscriptPkg.YoutubeTranscript || YoutubeTranscriptPkg.default?.YoutubeTranscript || YoutubeTranscriptPkg;
 } catch (e) { }
 
-// Obsessive browser-fingerprint headers
 const HUMAN_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
     "Referer": "https://www.google.com/",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "cross-site",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1"
 };
 
 const inflightRequests = new Map<string, Promise<string | null>>();
@@ -54,9 +47,7 @@ async function fetchWithYoutubeTranscript(videoId: string): Promise<string | nul
             headers: HUMAN_HEADERS
         });
         if (data && data.length > 0) return data.map((t: any) => t.text).join(" ");
-    } catch (e: any) {
-        console.warn(`[Transcribe API] Method 1 failed: ${e.message.slice(0, 50)}`);
-    }
+    } catch (e: any) { }
     return null;
 }
 
@@ -75,19 +66,32 @@ async function fetchWithYtTranscript(videoId: string): Promise<string | null> {
 }
 
 /**
- * Method 3: yt-dlp (Stealth Client Rotation)
+ * Method 3: yt-dlp (Authenticated Cookie Support)
  */
 async function fetchWithYtDlp(videoId: string): Promise<string | null> {
     const timestamp = Date.now();
     const tempBase = `/tmp/sub_${videoId}_${timestamp}`;
+    const cookieFile = `/tmp/cookies_${timestamp}.txt`;
 
     let ytDlpPath = "yt-dlp";
     if (fs.existsSync("/usr/local/bin/yt-dlp")) {
         ytDlpPath = "/usr/local/bin/yt-dlp";
     }
 
-    // "web_embedded" and "tv" are often less restricted for headless IPs
-    const clients = ["web_embedded", "ios", "android", "tv", "mweb"];
+    // Load cookies from Env if available (Critical for bypassing data center blocks)
+    let hasCookies = false;
+    if (process.env.YOUTUBE_COOKIES_BASE64) {
+        try {
+            const cookies = Buffer.from(process.env.YOUTUBE_COOKIES_BASE64, 'base64').toString('utf8');
+            fs.writeFileSync(cookieFile, cookies);
+            hasCookies = true;
+            console.log(`[Transcribe API] Using authenticated cookies for bypass.`);
+        } catch (e) {
+            console.error(`[Transcribe API] Failed to load cookies: ${e}`);
+        }
+    }
+
+    const clients = hasCookies ? ["web"] : ["web_embedded", "ios", "android", "tv"];
 
     for (const client of clients) {
         try {
@@ -101,12 +105,10 @@ async function fetchWithYtDlp(videoId: string): Promise<string | null> {
                 `--skip-download`,
                 `--ignore-errors`,
                 `--no-check-certificates`,
-                `--no-preferences`,
                 `--user-agent "${HUMAN_HEADERS["User-Agent"]}"`,
                 `--referer "${HUMAN_HEADERS["Referer"]}"`,
                 `--extractor-args "youtube:player-client=${client}"`,
-                // Adding some random sleep to avoid pattern detection
-                `--sleep-requests 1`,
+                hasCookies ? `--cookies "${cookieFile}"` : "",
                 fs.existsSync("/usr/local/bin/node") ? `--js-runtime "/usr/local/bin/node"` : "",
                 `-o "${tempBase}"`,
                 `"https://www.youtube.com/watch?v=${videoId}"`
@@ -135,6 +137,7 @@ async function fetchWithYtDlp(videoId: string): Promise<string | null> {
             try {
                 const files = fs.readdirSync("/tmp").filter(f => f.startsWith(`sub_${videoId}_${timestamp}`));
                 files.forEach(f => fs.unlinkSync(path.join("/tmp", f)));
+                if (fs.existsSync(cookieFile)) fs.unlinkSync(cookieFile);
             } catch (e) { }
         }
     }
@@ -171,7 +174,6 @@ export async function POST(req: Request) {
         const now = Date.now();
         const lastTime = lastRequestTime.get(videoId) || 0;
         if (now - lastTime < THROTTLE_MS) {
-            console.log(`[Transcribe API] Throttled request for ${videoId}`);
             return NextResponse.json({
                 error: "Too many requests for this video. Please wait 10 seconds."
             }, { status: 429 });
@@ -185,9 +187,8 @@ export async function POST(req: Request) {
         try {
             const fullText = await transcriptionPromise;
             if (!fullText || fullText.length < 10) {
-                console.error(`[Transcribe API] FINAL FAILURE for ${videoId}`);
                 return NextResponse.json({
-                    error: "YouTube is blocking this server's IP. Please try migration to Koyeb for a clean IP."
+                    error: "YouTube is blocking this server. Please add YOUTUBE_COOKIES_BASE64 to your Env variables."
                 }, { status: 429 });
             }
 
