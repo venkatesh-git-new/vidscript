@@ -25,6 +25,14 @@ const HUMAN_HEADERS = {
     "Referer": "https://www.google.com/"
 };
 
+/**
+ * Architectural Optimization: In-Memory Request Management
+ * (Works on Render because the process stays alive)
+ */
+const inflightRequests = new Map<string, Promise<string | null>>();
+const lastRequestTime = new Map<string, number>();
+const THROTTLE_MS = 10000; // 10 seconds
+
 function extractVideoId(url: string): string | null {
     const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/i;
     const match = url.match(regex);
@@ -32,7 +40,47 @@ function extractVideoId(url: string): string | null {
 }
 
 /**
- * Enhanced yt-dlp fetcher with human-mimicking and client rotation
+ * Method 1: youtube-transcript (Lightweight, No Download)
+ */
+async function fetchWithYoutubeTranscript(videoId: string): Promise<string | null> {
+    if (!YoutubeTranscript) return null;
+    try {
+        console.log(`[Transcribe API] Method 1: Trying youtube-transcript for ${videoId}...`);
+        const data = await YoutubeTranscript.fetchTranscript(videoId, {
+            lang: 'en',
+            headers: HUMAN_HEADERS
+        });
+        if (data && data.length > 0) {
+            console.log(`[Transcribe API] Method 1 Success`);
+            return data.map((t: any) => t.text).join(" ");
+        }
+    } catch (e: any) {
+        console.warn(`[Transcribe API] Method 1 failed: ${e.message.slice(0, 50)}`);
+    }
+    return null;
+}
+
+/**
+ * Method 2: yt-transcript library
+ */
+async function fetchWithYtTranscript(videoId: string): Promise<string | null> {
+    if (!YtTranscript) return null;
+    try {
+        console.log(`[Transcribe API] Method 2: Trying yt-transcript for ${videoId}...`);
+        const yt = new YtTranscript({ videoId });
+        const data = await yt.getTranscript();
+        if (data && data.length > 0) {
+            console.log(`[Transcribe API] Method 2 Success`);
+            return data.map((t: any) => t.text).join(" ");
+        }
+    } catch (e: any) {
+        console.warn(`[Transcribe API] Method 2 failed: ${e.message.slice(0, 50)}`);
+    }
+    return null;
+}
+
+/**
+ * Method 3: yt-dlp (Heavyweight, Obsessive Resilience Fallback)
  */
 async function fetchWithYtDlp(videoId: string): Promise<string | null> {
     const timestamp = Date.now();
@@ -43,12 +91,11 @@ async function fetchWithYtDlp(videoId: string): Promise<string | null> {
         ytDlpPath = "/usr/local/bin/yt-dlp";
     }
 
-    // Try multiple player clients. iOS and Android are the most resilient.
     const clients = ["ios", "android", "mweb", "web"];
 
     for (const client of clients) {
         try {
-            console.log(`[Transcribe API] Attempting bypass with client: ${client}...`);
+            console.log(`[Transcribe API] Method 3: Attempting ${client} client for ${videoId}...`);
 
             const args = [
                 `--write-subs`,
@@ -60,9 +107,7 @@ async function fetchWithYtDlp(videoId: string): Promise<string | null> {
                 `--no-check-certificates`,
                 `--user-agent "${HUMAN_HEADERS["User-Agent"]}"`,
                 `--referer "${HUMAN_HEADERS["Referer"]}"`,
-                `--add-header "Accept-Language:${HUMAN_HEADERS["Accept-Language"]}"`,
                 `--extractor-args "youtube:player-client=${client}"`,
-                // Force use of node if found, to handle JS challenges
                 fs.existsSync("/usr/local/bin/node") ? `--js-runtime "/usr/local/bin/node"` : "",
                 `-o "${tempBase}"`,
                 `"https://www.youtube.com/watch?v=${videoId}"`
@@ -75,7 +120,7 @@ async function fetchWithYtDlp(videoId: string): Promise<string | null> {
 
             if (subFile) {
                 const content = fs.readFileSync(path.join("/tmp", subFile), "utf8");
-                console.log(`[Transcribe API] Method 1 Success (Client: ${client})`);
+                console.log(`[Transcribe API] Method 3 Success with client: ${client}`);
                 return content
                     .replace(/WEBVTT\r?\n/g, "")
                     .replace(/\d+\r?\n\d{2}:\d{2}:\d{2}[\.,]\d{3} --> \d{2}:\d{2}:\d{2}[\.,]\d{3}.*\r?\n/g, "")
@@ -86,7 +131,7 @@ async function fetchWithYtDlp(videoId: string): Promise<string | null> {
                     .trim();
             }
         } catch (e: any) {
-            console.warn(`[Transcribe API] ${client} check failed: ${e.stderr?.toString().slice(0, 50) || e.message}`);
+            console.warn(`[Transcribe API] Method 3: ${client} failed`);
         } finally {
             try {
                 const files = fs.readdirSync("/tmp").filter(f => f.startsWith(`sub_${videoId}_${timestamp}`));
@@ -97,30 +142,14 @@ async function fetchWithYtDlp(videoId: string): Promise<string | null> {
     return null;
 }
 
-async function fetchWithYtTranscript(videoId: string): Promise<string | null> {
-    if (!YtTranscript) return null;
-    try {
-        console.log(`[Transcribe API] Method 2: Trying yt-transcript...`);
-        // Note: yt-transcript doesn't easily expose header modification in constructor
-        const yt = new YtTranscript({ videoId });
-        const data = await yt.getTranscript();
-        if (data && data.length > 0) return data.map((t: any) => t.text).join(" ");
-    } catch (e) { }
-    return null;
-}
-
-async function fetchWithYoutubeTranscript(videoId: string): Promise<string | null> {
-    if (!YoutubeTranscript) return null;
-    try {
-        console.log(`[Transcribe API] Method 3: Trying youtube-transcript...`);
-        // Pass configuration with custom headers
-        const data = await YoutubeTranscript.fetchTranscript(videoId, {
-            lang: 'en',
-            headers: HUMAN_HEADERS
-        });
-        if (data && data.length > 0) return data.map((t: any) => t.text).join(" ");
-    } catch (e) { }
-    return null;
+/**
+ * Orchestrator with Locking and Throttling
+ */
+async function performTranscription(videoId: string): Promise<string | null> {
+    let fullText = await fetchWithYoutubeTranscript(videoId);
+    if (!fullText) fullText = await fetchWithYtTranscript(videoId);
+    if (!fullText) fullText = await fetchWithYtDlp(videoId);
+    return fullText;
 }
 
 export async function POST(req: Request) {
@@ -129,25 +158,53 @@ export async function POST(req: Request) {
         const videoId = extractVideoId(url);
         if (!videoId) return NextResponse.json({ error: "Invalid YouTube URL" }, { status: 400 });
 
-        // 1. Check Cache
+        // A. Check Supabase Cache (Instant)
         try {
             const cached = await getCachedTranscript(videoId);
             if (cached) return NextResponse.json({ transcript: cached, source: "cache" });
         } catch (e) { }
 
-        // 2. Try All Methods in order
-        let fullText = await fetchWithYtDlp(videoId);
-        if (!fullText) fullText = await fetchWithYtTranscript(videoId);
-        if (!fullText) fullText = await fetchWithYoutubeTranscript(videoId);
-
-        if (!fullText || fullText.length < 10) {
-            return NextResponse.json({
-                error: "YouTube is temporarily blocking transcription from this server's IP. Please try again on your machine or wait a few minutes."
-            }, { status: 429 });
+        // B. Check In-Flight Locking (Prevent concurrent duplicate requests)
+        // If someone is already fetching this, just wait and return the shared result.
+        if (inflightRequests.has(videoId)) {
+            console.log(`[Transcribe API] Sharing in-flight request for ${videoId}`);
+            const result = await inflightRequests.get(videoId);
+            if (result) return NextResponse.json({ transcript: result, source: "concurrent" });
+            // If the inflight failed, we'll fall through to throttling/retry
         }
 
-        cacheTranscript(videoId, fullText).catch(() => { });
-        return NextResponse.json({ transcript: fullText, source: "captions" });
+        // C. Apply Throttling (Protect YouTube IP reputation/Prevent Spam)
+        const now = Date.now();
+        const lastTime = lastRequestTime.get(videoId) || 0;
+        if (now - lastTime < THROTTLE_MS) {
+            console.log(`[Transcribe API] Request throttled for ${videoId}`);
+            return NextResponse.json({
+                error: "This video was requested very recently. Please wait a few seconds and try again."
+            }, { status: 429 });
+        }
+        lastRequestTime.set(videoId, now);
+
+        // D. Start the Heavy Lifting
+        const transcriptionPromise = performTranscription(videoId);
+        inflightRequests.set(videoId, transcriptionPromise);
+
+        try {
+            const fullText = await transcriptionPromise;
+
+            if (!fullText || fullText.length < 10) {
+                return NextResponse.json({
+                    error: "YouTube is temporarily unavailable. Please try again on your machine or wait 30 minutes."
+                }, { status: 429 });
+            }
+
+            // Save to Cache
+            cacheTranscript(videoId, fullText).catch(() => { });
+            return NextResponse.json({ transcript: fullText, source: "captions" });
+
+        } finally {
+            // E. Clean up in-flight promise
+            inflightRequests.delete(videoId);
+        }
 
     } catch (error: any) {
         return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
