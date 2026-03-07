@@ -3,10 +3,14 @@ import { getCachedTranscript, cacheTranscript } from "@/utils/supabase";
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
-// @ts-ignore
-import { YtTranscript } from 'yt-transcript';
-// @ts-ignore
-import { YoutubeTranscript } from 'youtube-transcript';
+
+// Use dynamic require for better CJS/ESM interop in Next.js server environment
+const YtTranscriptPkg = require('yt-transcript');
+const YoutubeTranscriptPkg = require('youtube-transcript');
+
+// Extract the classes/objects safely
+const YtTranscript = YtTranscriptPkg.YtTranscript || YtTranscriptPkg.default?.YtTranscript || YtTranscriptPkg;
+const YoutubeTranscript = YoutubeTranscriptPkg.YoutubeTranscript || YoutubeTranscriptPkg.default?.YoutubeTranscript || YoutubeTranscriptPkg;
 
 /**
  * Extracts the video ID from a YouTube URL safely.
@@ -32,7 +36,6 @@ async function fetchWithYtDlp(videoId: string): Promise<string | null> {
 
     try {
         console.log(`[Transcribe API] Method 1: Running ${ytDlpPath} for ${videoId}...`);
-        // Simple command that worked in test scripts
         const command = `${ytDlpPath} --write-subs --write-auto-subs --sub-langs en --sub-format srt --skip-download --ignore-errors -o "${tempBase}" "https://www.youtube.com/watch?v=${videoId}"`;
 
         execSync(command, { stdio: "pipe" });
@@ -68,9 +71,10 @@ async function fetchWithYtDlp(videoId: string): Promise<string | null> {
  */
 async function fetchWithYtTranscript(videoId: string): Promise<string | null> {
     try {
-        console.log(`[Transcribe API] Method 2: Trying yt-transcript library...`);
-        const yt = new YtTranscript({});
-        const data = await yt.getTranscript(videoId);
+        console.log(`[Transcribe API] Method 2: Trying yt-transcript library for ${videoId}...`);
+        // Fix: must pass videoId to constructor
+        const yt = new YtTranscript({ videoId });
+        const data = await yt.getTranscript();
         if (data && data.length > 0) {
             console.log(`[Transcribe API] Method 2: Success`);
             return data.map((t: any) => t.text).join(" ");
@@ -86,7 +90,7 @@ async function fetchWithYtTranscript(videoId: string): Promise<string | null> {
  */
 async function fetchWithYoutubeTranscript(videoId: string): Promise<string | null> {
     try {
-        console.log(`[Transcribe API] Method 3: Trying youtube-transcript library...`);
+        console.log(`[Transcribe API] Method 3: Trying youtube-transcript library for ${videoId}...`);
         const data = await YoutubeTranscript.fetchTranscript(videoId);
         if (data && data.length > 0) {
             console.log(`[Transcribe API] Method 3: Success`);
