@@ -43,33 +43,37 @@ export default function Home() {
 
       // 3. Fetch from YouTube directly (Browser)
       console.log("[VidScript] Fetching from YouTube...");
-      const ytResponse = await fetch(`https://www.youtube.com/api/timedtext?v=${videoId}&lang=en`);
 
-      if (!ytResponse.ok) {
-        throw new Error("Could not fetch captions from YouTube. They might be disabled.");
+      const fetchCaptions = async (kind?: string) => {
+        const baseUrl = `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en`;
+        const url = kind ? `${baseUrl}&kind=${kind}` : baseUrl;
+        const response = await fetch(url);
+        if (!response.ok) return null;
+
+        const xmlText = await response.text();
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+        const textNodes = xmlDoc.getElementsByTagName("text");
+
+        if (textNodes.length === 0) return null;
+
+        let fullTranscript = "";
+        for (let i = 0; i < textNodes.length; i++) {
+          const txt = textNodes[i].textContent || "";
+          fullTranscript += txt + " ";
+        }
+        return fullTranscript.replace(/\s+/g, " ").trim();
+      };
+
+      let cleanedTranscript = await fetchCaptions(); // Try standard
+      if (!cleanedTranscript) {
+        console.log("[VidScript] Standard captions not found, trying auto-generated...");
+        cleanedTranscript = await fetchCaptions("asr"); // Try auto-generated
       }
 
-      const xmlText = await ytResponse.text();
-
-      // 4. Parse XML
-      const parser = new DOMParser();
-      const xmlDoc = parser.parseFromString(xmlText, "text/xml");
-      const textNodes = xmlDoc.getElementsByTagName("text");
-
-      if (textNodes.length === 0) {
-        throw new Error("No English captions found for this video.");
+      if (!cleanedTranscript) {
+        throw new Error("No English captions (manual or auto-generated) found for this video.");
       }
-
-      let fullTranscript = "";
-      for (let i = 0; i < textNodes.length; i++) {
-        // Decode HTML entities (e.g., &#39; to ')
-        const txt = textNodes[i].textContent || "";
-        fullTranscript += txt + " ";
-      }
-
-      const cleanedTranscript = fullTranscript
-        .replace(/\s+/g, " ")
-        .trim();
 
       setTranscript(cleanedTranscript);
 
