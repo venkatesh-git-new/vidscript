@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YT Transcribe | AI Video Transcription</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;700;800&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <main class="container">
+        <h1>YT Transcribe</h1>
+        <p class="subtitle">Straightforward YouTube video to text.</p>
+
+        <div class="search-container">
+            <div class="input-wrapper">
+                <input type="text" id="youtube-url" placeholder="Paste YouTube link here" aria-label="YouTube URL">
+                <p id="error-text" class="error-text hidden"></p>
+            </div>
+            <button id="generate-btn" class="primary-btn">
+                <span>Transcribe</span>
+                <div class="loader" id="btn-loader"></div>
+            </button>
+        </div>
+
+        <div id="result-section" class="result-box hidden">
+            <div class="actions">
+                <button id="copy-btn" class="secondary-btn">Copy Text</button>
+            </div>
+            <textarea id="transcript-content" readonly placeholder="Transcription will appear here..."></textarea>
+        </div>
+    </main>
+
+    <script src="main.js"></script>
+</body>
+
+</html>
