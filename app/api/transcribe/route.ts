@@ -69,7 +69,7 @@ async function fetchWithYtDlp(videoId: string): Promise<string | null> {
 async function fetchWithYtTranscript(videoId: string): Promise<string | null> {
     try {
         console.log(`[Transcribe API] Method 2: Trying yt-transcript library...`);
-        const yt = new YtTranscript();
+        const yt = new YtTranscript({});
         const data = await yt.getTranscript(videoId);
         if (data && data.length > 0) {
             console.log(`[Transcribe API] Method 2: Success`);
