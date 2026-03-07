@@ -23,40 +23,53 @@ async function fetchWithYtDlp(videoId: string): Promise<string | null> {
     try {
         console.log(`[Transcribe API] Running yt-dlp for ${videoId}...`);
 
-        // --write-auto-subs ensures we get something even if not manually uploaded
-        // We use --skip-download to only get the metadata/subtitles
+        // --sub-langs "en.*" catches en, en-US, en-GB etc.
+        // We try to get both manual and auto subs
         execSync(
-            `yt-dlp --write-subs --write-auto-subs --sub-langs en --sub-format srt --skip-download -o "${tempBase}" "${url}"`,
+            `yt-dlp --write-subs --write-auto-subs --sub-langs "en.*" --sub-format "srt/vtt/best" --skip-download -o "${tempBase}" "${url}"`,
             { stdio: "pipe" }
         );
 
-        const srtPath = `${tempBase}.en.srt`;
+        // yt-dlp can produce various suffixes like .en.srt, .en-US.vtt, etc.
+        const files = fs.readdirSync("/tmp").filter(f => f.startsWith(path.basename(tempBase)));
+        console.log(`[Transcribe API] Files created in tmp: ${files.join(", ")}`);
 
-        if (fs.existsSync(srtPath)) {
-            const content = fs.readFileSync(srtPath, "utf8");
+        // Find the best caption file (prefer en, then en-US, etc.)
+        const subFile = files.find(f => f.endsWith(".srt") || f.endsWith(".vtt"));
 
-            // Clean up SRT tags and timestamps
+        if (subFile) {
+            const fullPath = path.join("/tmp", subFile);
+            const content = fs.readFileSync(fullPath, "utf8");
+
+            // Clean up tags and timestamps (works for both VTT and SRT)
             const cleanedText = content
-                .replace(/\d+\r?\n\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\r?\n/g, "")
+                .replace(/WEBVTT\r?\n/g, "") // Remove VTT header
+                .replace(/Kind: captions\r?\n/g, "")
+                .replace(/Language: .*\r?\n/g, "")
+                .replace(/\d+\r?\n\d{2}:\d{2}:\d{2}[\.,]\d{3} --> \d{2}:\d{2}:\d{2}[\.,]\d{3}.*\r?\n/g, "") // Modern timestamps
+                .replace(/\d{2}:\d{2}:\d{2}[\.,]\d{3} --> \d{2}:\d{2}:\d{2}[\.,]\d{3}.*\r?\n/g, "") // Timestamps without index
                 .replace(/<[^>]*>/g, "") // Remove VTT/SRT tags like <c>
                 .replace(/\r?\n/g, " ")
                 .replace(/\s+/g, " ")
                 .trim();
 
-            // Cleanup file
-            fs.unlinkSync(srtPath);
-
             return cleanedText;
         }
+
+        console.warn(`[Transcribe API] No subtitle file found in /tmp for ${videoId} after yt-dlp run.`);
         return null;
     } catch (error: any) {
-        console.error(`[Transcribe API] yt-dlp failed: ${error.message}`);
+        console.error(`[Transcribe API] yt-dlp failed for ${videoId}: ${error.message}`);
+        // Log stderr if available
+        if (error.stderr) {
+            console.error(`[Transcribe API] yt-dlp stderr: ${error.stderr.toString()}`);
+        }
         return null;
     } finally {
-        // Ensure cleanup of any other potential files created by yt-dlp
+        // Cleanup ALL files matching the session prefix
         try {
-            const files = fs.readdirSync("/tmp").filter(f => f.startsWith(`sub_${videoId}`));
-            files.forEach(f => fs.unlinkSync(path.join("/tmp", f)));
+            const filesToCleanup = fs.readdirSync("/tmp").filter(f => f.startsWith(path.basename(tempBase)));
+            filesToCleanup.forEach(f => fs.unlinkSync(path.join("/tmp", f)));
         } catch (e) { }
     }
 }
