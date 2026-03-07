@@ -5,12 +5,22 @@ import fs from "fs";
 import path from "path";
 
 // Use dynamic require for better CJS/ESM interop in Next.js server environment
-const YtTranscriptPkg = require('yt-transcript');
-const YoutubeTranscriptPkg = require('youtube-transcript');
+let YtTranscript: any;
+let YoutubeTranscript: any;
 
-// Extract the classes/objects safely
-const YtTranscript = YtTranscriptPkg.YtTranscript || YtTranscriptPkg.default?.YtTranscript || YtTranscriptPkg;
-const YoutubeTranscript = YoutubeTranscriptPkg.YoutubeTranscript || YoutubeTranscriptPkg.default?.YoutubeTranscript || YoutubeTranscriptPkg;
+try {
+    const YtTranscriptPkg = require('yt-transcript');
+    YtTranscript = YtTranscriptPkg.YtTranscript || YtTranscriptPkg.default?.YtTranscript || YtTranscriptPkg;
+} catch (e) {
+    console.warn("[Transcribe API] yt-transcript package not found or failed to load");
+}
+
+try {
+    const YoutubeTranscriptPkg = require('youtube-transcript');
+    YoutubeTranscript = YoutubeTranscriptPkg.YoutubeTranscript || YoutubeTranscriptPkg.default?.YoutubeTranscript || YoutubeTranscriptPkg;
+} catch (e) {
+    console.warn("[Transcribe API] youtube-transcript package not found or failed to load");
+}
 
 /**
  * Extracts the video ID from a YouTube URL safely.
@@ -22,7 +32,7 @@ function extractVideoId(url: string): string | null {
 }
 
 /**
- * Method 1: yt-dlp (Best quality, handles timestamps)
+ * Method 1: yt-dlp (Obsessive Resilience Edition)
  */
 async function fetchWithYtDlp(videoId: string): Promise<string | null> {
     const timestamp = Date.now();
@@ -36,9 +46,30 @@ async function fetchWithYtDlp(videoId: string): Promise<string | null> {
 
     try {
         console.log(`[Transcribe API] Method 1: Running ${ytDlpPath} for ${videoId}...`);
-        const command = `${ytDlpPath} --write-subs --write-auto-subs --sub-langs en --sub-format srt --skip-download --ignore-errors -o "${tempBase}" "https://www.youtube.com/watch?v=${videoId}"`;
 
-        execSync(command, { stdio: "pipe" });
+        // High-resilience flags to avoid bot detection
+        const args = [
+            `--write-subs`,
+            `--write-auto-subs`,
+            `--sub-langs en`,
+            `--sub-format srt`,
+            `--skip-download`,
+            `--ignore-errors`,
+            `--no-check-certificates`,
+            `--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"`,
+            `--referer "https://www.google.com/"`,
+            `--geo-bypass`,
+            `-o "${tempBase}"`,
+            `"https://www.youtube.com/watch?v=${videoId}"`
+        ].join(" ");
+
+        const command = `${ytDlpPath} ${args}`;
+
+        try {
+            execSync(command, { stdio: "pipe" });
+        } catch (execError: any) {
+            console.error(`[Transcribe API] yt-dlp execution error: ${execError.stderr?.toString() || execError.message}`);
+        }
 
         const matchingFiles = fs.readdirSync("/tmp").filter(f => f.startsWith(`sub_${videoId}_${timestamp}`));
         const subFile = matchingFiles.find(f => f.endsWith(".srt") || f.endsWith(".vtt"));
@@ -54,9 +85,11 @@ async function fetchWithYtDlp(videoId: string): Promise<string | null> {
                 .replace(/\r?\n/g, " ")
                 .replace(/\s+/g, " ")
                 .trim();
+        } else {
+            console.warn(`[Transcribe API] Method 1: No sub files found for ${videoId}`);
         }
     } catch (e: any) {
-        console.warn(`[Transcribe API] Method 1 failed: ${e.message}`);
+        console.error(`[Transcribe API] Method 1 crashed: ${e.message}`);
     } finally {
         try {
             const files = fs.readdirSync("/tmp").filter(f => f.startsWith(`sub_${videoId}_${timestamp}`));
@@ -70,9 +103,9 @@ async function fetchWithYtDlp(videoId: string): Promise<string | null> {
  * Method 2: yt-transcript library
  */
 async function fetchWithYtTranscript(videoId: string): Promise<string | null> {
+    if (!YtTranscript) return null;
     try {
-        console.log(`[Transcribe API] Method 2: Trying yt-transcript library for ${videoId}...`);
-        // Fix: must pass videoId to constructor
+        console.log(`[Transcribe API] Method 2: Trying yt-transcript for ${videoId}...`);
         const yt = new YtTranscript({ videoId });
         const data = await yt.getTranscript();
         if (data && data.length > 0) {
@@ -89,8 +122,9 @@ async function fetchWithYtTranscript(videoId: string): Promise<string | null> {
  * Method 3: youtube-transcript library
  */
 async function fetchWithYoutubeTranscript(videoId: string): Promise<string | null> {
+    if (!YoutubeTranscript) return null;
     try {
-        console.log(`[Transcribe API] Method 3: Trying youtube-transcript library for ${videoId}...`);
+        console.log(`[Transcribe API] Method 3: Trying youtube-transcript for ${videoId}...`);
         const data = await YoutubeTranscript.fetchTranscript(videoId);
         if (data && data.length > 0) {
             console.log(`[Transcribe API] Method 3: Success`);
@@ -131,9 +165,9 @@ export async function POST(req: Request) {
         }
 
         if (!fullText || fullText.length < 10) {
-            console.error(`[Transcribe API] All methods failed for ${videoId}`);
+            console.error(`[Transcribe API] All methods exhausted for ${videoId}`);
             return NextResponse.json({
-                error: "No captions found for this video. Verified across 3 different extraction methods."
+                error: "YouTube blocked the request or no captions exist. Try again in a few minutes."
             }, { status: 404 });
         }
 
