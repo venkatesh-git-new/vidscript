@@ -5,6 +5,8 @@ import { Copy, Download, Loader2, Youtube, FileText, Check, AlertCircle } from "
 import AdBanner from "@/components/AdBanner";
 import Script from "next/script"; // Assuming Turnstile via script tag
 
+import { extractVideoId, getCaptionTracks, selectBestTrack, downloadTranscript } from "@/utils/youtube-browser";
+
 export default function Home() {
   const [url, setUrl] = useState("");
   const [transcript, setTranscript] = useState("");
@@ -28,6 +30,9 @@ export default function Home() {
     }
   }, []);
 
+  /**
+   * Browser-Side Transcription Flow
+   */
   const handleTranscribe = async () => {
     if (!url) return;
     
@@ -50,10 +55,16 @@ export default function Home() {
         body: JSON.stringify({ url, turnstileToken }),
       });
 
-      const data = await response.json();
+      // 2. Check Cache
+      console.log("[VidScript] Checking cache...");
+      const cacheResponse = await fetch(`/api/transcript?videoId=${videoId}`);
+      const cacheData = await cacheResponse.json();
 
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to fetch transcript");
+      if (cacheData.status === "success" && cacheData.transcript) {
+        console.log("[VidScript] Serving from cache");
+        setTranscript(cacheData.transcript);
+        setIsLoading(false);
+        return;
       }
 
       if (data.status === "done") {

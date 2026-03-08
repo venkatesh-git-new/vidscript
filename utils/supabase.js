@@ -17,12 +17,12 @@ export async function getCachedTranscript(videoId) {
 
     const { data, error } = await supabase
         .from("transcripts")
-        .select("transcript")
+        .select("transcript, source")
         .eq("video_id", videoId)
         .single();
 
     if (error || !data) return null;
-    return data.transcript;
+    return { transcript: data.transcript, source: data.source || "unknown" };
 }
 
 /**
@@ -31,13 +31,25 @@ export async function getCachedTranscript(videoId) {
  * @param {string} transcript - The full transcript text.
  * @param {string} title - Optional video title.
  */
-export async function cacheTranscript(videoId, transcript, title = "") {
+export async function cacheTranscript(videoId, transcript, title = "", source = "caption") {
     if (!supabase) return;
 
-    await supabase.from("transcripts").upsert({
-        video_id: videoId,
-        transcript: transcript,
-        title: title,
-        created_at: new Date().toISOString()
-    });
+    try {
+        await supabase.from("transcripts").upsert({
+            video_id: videoId,
+            transcript: transcript,
+            title: title,
+            source: source,
+            created_at: new Date().toISOString()
+        });
+    } catch (e) {
+        console.warn("[Supabase] Caching failed (likely missing 'source' column):", e.message);
+        // Fallback: try without source column if it hasn't been added to DB yet
+        await supabase.from("transcripts").upsert({
+            video_id: videoId,
+            transcript: transcript,
+            title: title,
+            created_at: new Date().toISOString()
+        });
+    }
 }

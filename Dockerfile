@@ -1,10 +1,9 @@
 # Use official Node.js image
 FROM node:20-slim
 
-# Install system dependencies: yt-dlp and ffmpeg
+# Install system dependencies: yt-dlp and ffmpeg for AI fallback
 RUN apt-get update && apt-get install -y \
     python3 \
-    python3-pip \
     ffmpeg \
     curl \
     ca-certificates \
