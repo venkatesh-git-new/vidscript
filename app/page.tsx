@@ -1,27 +1,53 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Copy, Download, Loader2, Youtube, FileText, Check, AlertCircle } from "lucide-react";
 import AdBanner from "@/components/AdBanner";
+import Script from "next/script"; // Assuming Turnstile via script tag
 
 export default function Home() {
   const [url, setUrl] = useState("");
   const [transcript, setTranscript] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [processingStatus, setProcessingStatus] = useState("");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState("");
+  
+  // Ref for polling interval to prevent memory leaks
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    // Expose turnstile callback for global window usage
+    (window as any).onTurnstileSuccess = (token: string) => {
+      setTurnstileToken(token);
+    };
+
+    return () => {
+       if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+    }
+  }, []);
 
   const handleTranscribe = async () => {
     if (!url) return;
+    
+    // Check if CAPTCHA is configured and token is required
+    const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+    if (siteKey && !turnstileToken) {
+       setError("Please complete the CAPTCHA.");
+       return;
+    }
+
     setIsLoading(true);
     setError("");
     setTranscript("");
+    setProcessingStatus("Initializing request...");
 
     try {
       const response = await fetch("/api/transcribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url, turnstileToken }),
       });
 
       const data = await response.json();
@@ -30,12 +56,57 @@ export default function Home() {
         throw new Error(data.error || "Failed to fetch transcript");
       }
 
-      setTranscript(data.transcript);
+      if (data.status === "done") {
+         setTranscript(data.transcript);
+         setIsLoading(false);
+         setProcessingStatus("");
+      } else if (data.status === "processing" && data.videoId) {
+         setProcessingStatus(data.message || "Generating transcript...");
+         startPolling(data.videoId);
+      }
     } catch (err: any) {
       setError(err.message);
-    } finally {
       setIsLoading(false);
+      setProcessingStatus("");
     }
+  };
+
+  const startPolling = (videoId: string) => {
+      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+
+      pollingIntervalRef.current = setInterval(async () => {
+         try {
+             const res = await fetch(`/api/job/${videoId}`);
+             const data = await res.json();
+
+             if (data.status === 'done') {
+                if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+                const resp = await fetch("/api/transcribe", { // call again to get from cache
+                     method: "POST",
+                     headers: { "Content-Type": "application/json" },
+                     body: JSON.stringify({ url }), // Don't need token if we get from cache ideally, but simplify caching logic in proxy
+                });
+                
+                // Let's just use the job endpoint to return text directly, wait, I updated `/api/job/[videoId]` to return `transcript`!
+                if(data.transcript) {
+                     setTranscript(data.transcript);
+                }
+                
+                setIsLoading(false);
+                setProcessingStatus("");
+             } else if (data.status === 'failed') {
+                if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+                setError(data.error || "Failed to extract transcript.");
+                setIsLoading(false);
+                setProcessingStatus("");
+             } else {
+                setProcessingStatus("Still processing... This may take up to a minute.");
+             }
+         } catch(err) {
+             // Let it retry next time
+             console.error("Polling error", err);
+         }
+      }, 5000); // Poll every 5 seconds
   };
 
   const handleCopy = () => {
@@ -46,16 +117,19 @@ export default function Home() {
 
   const handleDownload = () => {
     const blob = new Blob([transcript], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
+    const localUrl = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
+    a.href = localUrl;
     a.download = "transcript.txt";
     a.click();
-    URL.revokeObjectURL(url);
+    URL.revokeObjectURL(localUrl);
   };
+
+  const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 
   return (
     <main className="min-h-screen bg-[#020202] text-white flex flex-col items-center px-4 py-8 selection:bg-red-500/30">
+      <Script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></Script>
       {/* Background Glow */}
       <div className="fixed top-0 left-1/2 -translate-x-1/2 w-full max-w-6xl aspect-square bg-red-600/10 blur-[120px] -z-10 rounded-full" />
 
@@ -88,29 +162,45 @@ export default function Home() {
 
       {/* Input Area */}
       <div className="w-full max-w-2xl space-y-4 mb-8 animate-in fade-in slide-in-from-bottom-6 duration-1000 delay-200">
-        <div className="relative group">
-          <input
-            type="text"
-            placeholder="Paste YouTube URL here..."
-            className="w-full h-16 bg-white/5 border border-white/10 rounded-2xl px-6 outline-none focus:ring-2 focus:ring-red-500/50 focus:border-red-500/50 transition-all text-lg group-hover:border-white/20"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleTranscribe()}
-          />
-          <button
-            onClick={handleTranscribe}
-            disabled={isLoading || !url}
-            className="absolute right-2 top-2 h-12 px-8 bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:hover:bg-red-600 font-semibold rounded-xl transition-all active:scale-95 flex items-center gap-2 overflow-hidden shadow-lg shadow-red-600/20"
-          >
-            {isLoading ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
-            ) : (
-              <>
-                <span>Transcribe</span>
-                <Youtube className="w-5 h-5" />
-              </>
-            )}
-          </button>
+        <div className="relative group flex flex-col items-center gap-4">
+          <div className="w-full relative">
+              <input
+                type="text"
+                placeholder="Paste YouTube URL here..."
+                className="w-full h-16 bg-white/5 border border-white/10 rounded-2xl px-6 outline-none focus:ring-2 focus:ring-red-500/50 focus:border-red-500/50 transition-all text-lg group-hover:border-white/20"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleTranscribe()}
+              />
+              <button
+                onClick={handleTranscribe}
+                disabled={isLoading || !url}
+                className="absolute right-2 top-2 h-12 px-8 bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:hover:bg-red-600 font-semibold rounded-xl transition-all active:scale-95 flex items-center gap-2 overflow-hidden shadow-lg shadow-red-600/20"
+              >
+                {isLoading ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <>
+                    <span>Transcribe</span>
+                    <Youtube className="w-5 h-5" />
+                  </>
+                )}
+              </button>
+          </div>
+
+          {siteKey && (
+              <div 
+                  className="cf-turnstile" 
+                  data-sitekey={siteKey}
+                  data-theme="dark"
+                  data-callback="onTurnstileSuccess"
+              ></div>
+          )}
+
+          {isLoading && processingStatus && (
+              <p className="text-sm text-red-400 animate-pulse">{processingStatus}</p>
+          )}
+
         </div>
 
         {error && (
