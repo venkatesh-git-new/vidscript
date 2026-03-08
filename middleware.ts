@@ -12,7 +12,7 @@ const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
 export function middleware(request: NextRequest) {
   // Only apply to the transcribe API
   if (request.nextUrl.pathname === '/api/transcribe') {
-    const ip = request.ip || request.headers.get('x-forwarded-for') || '127.0.0.1';
+    const ip = request.headers.get('x-forwarded-for') || '127.0.0.1';
     
     const now = Date.now();
     const rateLimitInfo = rateLimitMap.get(ip);
