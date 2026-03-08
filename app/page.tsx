@@ -55,16 +55,10 @@ export default function Home() {
         body: JSON.stringify({ url, turnstileToken }),
       });
 
-      // 2. Check Cache
-      console.log("[VidScript] Checking cache...");
-      const cacheResponse = await fetch(`/api/transcript?videoId=${videoId}`);
-      const cacheData = await cacheResponse.json();
+      const data = await response.json();
 
-      if (cacheData.status === "success" && cacheData.transcript) {
-        console.log("[VidScript] Serving from cache");
-        setTranscript(cacheData.transcript);
-        setIsLoading(false);
-        return;
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to fetch transcript");
       }
 
       if (data.status === "done") {
