@@ -24,7 +24,7 @@ export default function RootLayout({
           crossOrigin="anonymous"
         />
       </head>
-      <body className={`${inter.className} antialiased bg-[#020202]`}>
+      <body suppressHydrationWarning className={`${inter.className} antialiased bg-[#020202]`}>
         {children}
       </body>
     </html>
