@@ -169,5 +169,17 @@ async function loop() {
     setTimeout(loop, WORKER_INTERVAL_MS);
 }
 
+// --- RENDER WEB SERVICE WORKAROUND ---
+// Render requires Web Services to bind to a port, even if they are just background workers.
+const http = require('http');
+const port = process.env.PORT || 10000;
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Worker is active\n');
+}).listen(port, () => {
+    console.log(`[Worker] Dummy web server listening on port ${port}`);
+});
+// -------------------------------------
+
 console.log("[Worker] Starting Render worker...");
 loop();
