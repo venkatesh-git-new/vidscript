@@ -3,6 +3,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -32,12 +33,16 @@ async function processJob(job) {
     const videoId = job.video_id;
     const url = `https://www.youtube.com/watch?v=${videoId}`;
     const timestamp = Date.now();
-    const tempBase = `/tmp/sub_${videoId}_${timestamp}`;
+    const tempDir = os.tmpdir();
+    const tempBase = path.join(tempDir, `sub_${videoId}_${timestamp}`);
 
     try {
         console.log(`[Worker] Checking if subs exist for ${videoId}...`);
         try {
-            execSync(`yt-dlp --list-subs "${url}"`, { stdio: 'pipe' });
+            const ytDlpCmd = fs.existsSync(path.join(__dirname, 'yt-dlp.exe')) 
+                ? `"${path.join(__dirname, 'yt-dlp.exe')}"` 
+                : 'yt-dlp';
+            execSync(`${ytDlpCmd} --list-subs "${url}"`, { stdio: 'pipe' });
         } catch (e) {
             // It might fail if no subs exist or video is unavailable
             const stderr = e.stderr ? e.stderr.toString() : "";
@@ -50,10 +55,15 @@ async function processJob(job) {
 
         console.log(`[Worker] Fetching subs for ${videoId}...`);
         
+        const ytDlpCmd = fs.existsSync(path.join(__dirname, 'yt-dlp.exe')) 
+            ? `"${path.join(__dirname, 'yt-dlp.exe')}"` 
+            : 'yt-dlp';
+
         // Fetch JSON3 subs
         const args = [
-            `--write-auto-sub`,
-            `--sub-lang en,en-US,en-GB`,
+            `--write-subs`,
+            `--write-auto-subs`,
+            `--sub-langs en,en-US,en-GB`,
             `--sub-format json3`,
             `--skip-download`,
             `--ignore-errors`,
@@ -63,13 +73,13 @@ async function processJob(job) {
         ].join(" ");
 
         try {
-            execSync(`yt-dlp ${args}`, { stdio: 'pipe' });
+            execSync(`${ytDlpCmd} ${args}`, { stdio: 'pipe' });
         } catch (e) {
             console.warn(`[Worker] yt-dlp threw an error, but file might still exist: ${e.message}`);
         }
 
         // Find the generated json3 file
-        const matchingFiles = fs.readdirSync("/tmp").filter(f => f.startsWith(`sub_${videoId}_${timestamp}`) && f.endsWith(".json3"));
+        const matchingFiles = fs.readdirSync(tempDir).filter(f => f.startsWith(`sub_${videoId}_${timestamp}`) && f.endsWith(".json3"));
         
         if (matchingFiles.length === 0) {
             console.log(`[Worker] Failed to download subtitles for ${videoId}`);
@@ -77,24 +87,37 @@ async function processJob(job) {
             return;
         }
 
-        const subFile = matchingFiles[0];
-        const subData = JSON.parse(fs.readFileSync(path.join("/tmp", subFile), 'utf8'));
-        
-        // Parse JSON3
         let transcriptText = "";
-        if (subData.events) {
-            for (const event of subData.events) {
-                if (event.segs && event.segs.length > 0) {
-                    const text = event.segs.map(s => s.utf8).join("").replace(/\n/g, ' ').trim();
-                    if (text && text !== '\n') {
-                        const timeStart = event.tStartMs || 0;
-                        transcriptText += `${formatTimestamp(timeStart)} ${text}\n`;
+        let parsedSuccessfully = false;
+
+        for (const subFile of matchingFiles) {
+            try {
+                const subData = JSON.parse(fs.readFileSync(path.join(tempDir, subFile), 'utf8'));
+                let currentTranscript = "";
+        
+                // Parse JSON3
+                if (subData.events) {
+                    for (const event of subData.events) {
+                        if (event.segs && event.segs.length > 0) {
+                            const text = event.segs.map(s => s.utf8).join("").replace(/\n/g, ' ').trim();
+                            if (text && text !== '\n') {
+                                currentTranscript += `${text} `;
+                            }
+                        }
                     }
                 }
+
+                if (currentTranscript.trim()) {
+                    transcriptText = currentTranscript;
+                    parsedSuccessfully = true;
+                    break; // Found a valid transcript!
+                }
+            } catch (err) {
+                console.warn(`[Worker] Failed to parse subtitle file ${subFile}: ${err.message}`);
             }
         }
 
-        if (!transcriptText.trim()) {
+        if (!parsedSuccessfully || !transcriptText.trim()) {
             throw new Error("Parsed transcript is empty.");
         }
 
@@ -113,7 +136,9 @@ async function processJob(job) {
 
         // Cleanup
         try {
-            fs.unlinkSync(path.join("/tmp", subFile));
+            for (const file of matchingFiles) {
+                fs.unlinkSync(path.join(tempDir, file));
+            }
         } catch (e) {}
 
     } catch (e) {
