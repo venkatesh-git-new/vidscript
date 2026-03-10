@@ -4,6 +4,7 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { YoutubeTranscript } = require('youtube-transcript');
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -25,7 +26,7 @@ function formatTimestamp(ms) {
 }
 
 async function processJob(job) {
-    console.log(`[Worker] Processing job for video: ${job.video_id}`);
+    console.log(`[Worker] Started job for video: ${job.video_id}`);
     
     // Mark as processing
     await supabase.from('jobs').update({ status: 'processing' }).eq('id', job.id);
@@ -36,110 +37,121 @@ async function processJob(job) {
     const tempDir = os.tmpdir();
     const tempBase = path.join(tempDir, `sub_${videoId}_${timestamp}`);
 
-    try {
-        console.log(`[Worker] Checking if subs exist for ${videoId}...`);
-        try {
-            const ytDlpCmd = fs.existsSync(path.join(__dirname, 'yt-dlp.exe')) 
-                ? `"${path.join(__dirname, 'yt-dlp.exe')}"` 
-                : 'yt-dlp';
-            execSync(`${ytDlpCmd} --list-subs "${url}"`, { stdio: 'pipe' });
-        } catch (e) {
-            // It might fail if no subs exist or video is unavailable
-            const stderr = e.stderr ? e.stderr.toString() : "";
-            if (stderr.includes("has no subtitles")) {
-                console.log(`[Worker] No subtitles available for ${videoId}`);
-                await supabase.from('jobs').update({ status: 'failed' }).eq('id', job.id);
-                return;
-            }
-        }
+    const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("Timeout: Extraction took over 60 seconds")), 60000)
+    );
 
-        console.log(`[Worker] Fetching subs for ${videoId}...`);
-        
-        const ytDlpCmd = fs.existsSync(path.join(__dirname, 'yt-dlp.exe')) 
-            ? `"${path.join(__dirname, 'yt-dlp.exe')}"` 
-            : 'yt-dlp';
-
-        // Fetch JSON3 subs
-        const args = [
-            `--write-subs`,
-            `--write-auto-subs`,
-            `--sub-langs en,en-US,en-GB`,
-            `--sub-format json3`,
-            `--skip-download`,
-            `--ignore-errors`,
-            `--no-check-certificates`,
-            `-o "${tempBase}"`,
-            `"${url}"`
-        ].join(" ");
-
-        try {
-            execSync(`${ytDlpCmd} ${args}`, { stdio: 'pipe' });
-        } catch (e) {
-            console.warn(`[Worker] yt-dlp threw an error, but file might still exist: ${e.message}`);
-        }
-
-        // Find the generated json3 file
-        const matchingFiles = fs.readdirSync(tempDir).filter(f => f.startsWith(`sub_${videoId}_${timestamp}`) && f.endsWith(".json3"));
-        
-        if (matchingFiles.length === 0) {
-            console.log(`[Worker] Failed to download subtitles for ${videoId}`);
-            await supabase.from('jobs').update({ status: 'failed' }).eq('id', job.id);
-            return;
-        }
-
+    const extractionPromise = async () => {
         let transcriptText = "";
-        let parsedSuccessfully = false;
+        let sourceUsed = "";
 
-        for (const subFile of matchingFiles) {
+        // Method 1: youtube-transcript
+        console.log(`[Worker] Attempting extraction with youtube-transcript for ${videoId}...`);
+        try {
+            const transcriptItems = await YoutubeTranscript.fetchTranscript(videoId);
+            if (transcriptItems && transcriptItems.length > 0) {
+                transcriptText = transcriptItems.map(item => item.text).join(" ").replace(/\n/g, ' ').trim();
+                sourceUsed = "youtube-transcript";
+                console.log(`[Worker] Extraction success using youtube-transcript for ${videoId}`);
+            }
+        } catch (ytErr) {
+            console.log(`[Worker] Extraction failure using youtube-transcript: ${ytErr.message}`);
+        }
+
+        // Method 2: yt-dlp fallback
+        if (!transcriptText) {
+            console.log(`[Worker] Attempting extraction with yt-dlp for ${videoId}...`);
             try {
-                const subData = JSON.parse(fs.readFileSync(path.join(tempDir, subFile), 'utf8'));
-                let currentTranscript = "";
-        
-                // Parse JSON3
-                if (subData.events) {
-                    for (const event of subData.events) {
-                        if (event.segs && event.segs.length > 0) {
-                            const text = event.segs.map(s => s.utf8).join("").replace(/\n/g, ' ').trim();
-                            if (text && text !== '\n') {
-                                currentTranscript += `${text} `;
+                const ytDlpCmd = fs.existsSync(path.join(__dirname, 'yt-dlp.exe')) 
+                    ? `"${path.join(__dirname, 'yt-dlp.exe')}"` 
+                    : 'yt-dlp';
+
+                // Check subs first
+                try {
+                    execSync(`${ytDlpCmd} --list-subs "${url}"`, { stdio: 'pipe' });
+                } catch (e) {
+                    const stderr = e.stderr ? e.stderr.toString() : "";
+                    if (stderr.includes("has no subtitles")) {
+                        throw new Error("No subtitles available according to yt-dlp");
+                    }
+                }
+
+                // Fetch JSON3 subs
+                const args = [
+                    `--write-subs`,
+                    `--write-auto-subs`,
+                    `--sub-langs en,en-US,en-GB`,
+                    `--sub-format json3`,
+                    `--skip-download`,
+                    `--ignore-errors`,
+                    `--no-check-certificates`,
+                    `-o "${tempBase}"`,
+                    `"${url}"`
+                ].join(" ");
+
+                execSync(`${ytDlpCmd} ${args}`, { stdio: 'pipe' });
+
+                const matchingFiles = fs.readdirSync(tempDir).filter(f => f.startsWith(`sub_${videoId}_${timestamp}`) && f.endsWith(".json3"));
+                
+                if (matchingFiles.length > 0) {
+                    for (const subFile of matchingFiles) {
+                        try {
+                            const subData = JSON.parse(fs.readFileSync(path.join(tempDir, subFile), 'utf8'));
+                            let currentTranscript = "";
+                            if (subData.events) {
+                                for (const event of subData.events) {
+                                    if (event.segs && event.segs.length > 0) {
+                                        const text = event.segs.map(s => s.utf8).join("").replace(/\n/g, ' ').trim();
+                                        if (text && text !== '\n') {
+                                            currentTranscript += `${text} `;
+                                        }
+                                    }
+                                }
                             }
+                            if (currentTranscript.trim()) {
+                                transcriptText = currentTranscript;
+                                sourceUsed = "yt-dlp";
+                                console.log(`[Worker] Extraction success using yt-dlp for ${videoId}`);
+                                break;
+                            }
+                        } catch (err) {
+                            console.warn(`[Worker] Failed to parse subtitle file ${subFile}: ${err.message}`);
                         }
                     }
                 }
 
-                if (currentTranscript.trim()) {
-                    transcriptText = currentTranscript;
-                    parsedSuccessfully = true;
-                    break; // Found a valid transcript!
-                }
-            } catch (err) {
-                console.warn(`[Worker] Failed to parse subtitle file ${subFile}: ${err.message}`);
+                // Cleanup
+                try {
+                    for (const file of matchingFiles) fs.unlinkSync(path.join(tempDir, file));
+                } catch (e) {}
+            } catch (ytDlpErr) {
+                console.log(`[Worker] Extraction failure using yt-dlp: ${ytDlpErr.message}`);
             }
         }
 
-        if (!parsedSuccessfully || !transcriptText.trim()) {
-            throw new Error("Parsed transcript is empty.");
+        if (!transcriptText || !transcriptText.trim()) {
+            throw new Error("All extraction methods failed or parsed transcript is empty.");
         }
 
+        return { transcriptText, sourceUsed };
+    };
+
+    try {
+        const result = await Promise.race([extractionPromise(), timeoutPromise]);
+        
         // Store in DB
         console.log(`[Worker] Storing transcript for ${videoId}...`);
         await supabase.from('transcripts').upsert({
             video_id: videoId,
-            title: '', // Optionally we could fetch title with yt-dlp too
+            title: '',
             language: 'en',
-            transcript_text: transcriptText.trim()
+            transcript: result.transcriptText.trim(),
+            source: result.sourceUsed
         });
 
         // Mark as done
-        await supabase.from('jobs').update({ status: 'done' }).eq('id', job.id);
+        await supabase.from('jobs').update({ status: 'completed' }).eq('id', job.id);
         console.log(`[Worker] Successfully processed job for ${videoId}`);
-
-        // Cleanup
-        try {
-            for (const file of matchingFiles) {
-                fs.unlinkSync(path.join(tempDir, file));
-            }
-        } catch (e) {}
 
     } catch (e) {
         console.error(`[Worker] Error processing job for ${videoId}:`, e.message);

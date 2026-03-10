@@ -5,7 +5,8 @@ CREATE TABLE IF NOT EXISTS transcripts (
     video_id TEXT PRIMARY KEY,
     title TEXT,
     language TEXT,
-    transcript_text TEXT NOT NULL,
+    transcript TEXT NOT NULL,
+    source TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

@@ -13,14 +13,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ videoId:
     // 1. Check if the transcript is already done and available
     const { data: transcriptData, error: transcriptError } = await supabase
       .from("transcripts")
-      .select("transcript_text")
+      .select("transcript")
       .eq("video_id", videoId)
       .single();
 
-    if (transcriptData && transcriptData.transcript_text) {
+    if (transcriptData && transcriptData.transcript) {
       return NextResponse.json({
-        status: "done",
-        transcript: transcriptData.transcript_text
+        status: "completed",
+        transcript: transcriptData.transcript
       });
     }
 
@@ -40,7 +40,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ videoId:
       return NextResponse.json({ status: jobData.status });
     }
 
-    return NextResponse.json({ status: "not_found", error: "Job not found." }, { status: 404 });
+    // If job wasn't found but we got here, just return processing so frontend keeps polling while backend creates one.
+    return NextResponse.json({ status: "processing" });
   } catch (error: any) {
     console.error("Job API Error:", error);
     return NextResponse.json({ error: "Server error querying job status." }, { status: 500 });

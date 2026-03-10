@@ -61,11 +61,37 @@ export default function Home() {
         throw new Error(data.error || "Failed to fetch transcript");
       }
 
-      if (data.status === "done") {
+      if (data.status === "done" || data.status === "completed") {
          setTranscript(data.transcript);
          setIsLoading(false);
          setProcessingStatus("");
       } else if (data.status === "processing" && data.videoId) {
+         setProcessingStatus("Attempting browser extraction...");
+         
+         // 1. Try Browser Extraction First
+         try {
+             const tracks = await getCaptionTracks(data.videoId);
+             const bestTrack = selectBestTrack(tracks);
+             const extractedText = await downloadTranscript(bestTrack.baseUrl);
+             
+             if (extractedText) {
+                 // Save it to the backend
+                 await fetch("/api/save-transcript", {
+                     method: "POST",
+                     headers: { "Content-Type": "application/json" },
+                     body: JSON.stringify({ videoId: data.videoId, transcript: extractedText, source: "browser" })
+                 });
+                 
+                 setTranscript(extractedText);
+                 setIsLoading(false);
+                 setProcessingStatus("");
+                 return; // Stop the flow here
+             }
+         } catch (browserErr) {
+             console.warn("Browser extraction failed, falling back to worker polling:", browserErr);
+         }
+         
+         // 2. Fallback to polling the worker
          setProcessingStatus(data.message || "Generating transcript...");
          startPolling(data.videoId);
       }
@@ -84,15 +110,9 @@ export default function Home() {
              const res = await fetch(`/api/job/${videoId}`);
              const data = await res.json();
 
-             if (data.status === 'done') {
+             if (data.status === 'completed' || data.status === 'done') {
                 if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
-                const resp = await fetch("/api/transcribe", { // call again to get from cache
-                     method: "POST",
-                     headers: { "Content-Type": "application/json" },
-                     body: JSON.stringify({ url }), // Don't need token if we get from cache ideally, but simplify caching logic in proxy
-                });
                 
-                // Let's just use the job endpoint to return text directly, wait, I updated `/api/job/[videoId]` to return `transcript`!
                 if(data.transcript) {
                      setTranscript(data.transcript);
                 }
@@ -101,7 +121,7 @@ export default function Home() {
                 setProcessingStatus("");
              } else if (data.status === 'failed') {
                 if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
-                setError(data.error || "Failed to extract transcript.");
+                setError(data.error || "Transcript unavailable for this video.");
                 setIsLoading(false);
                 setProcessingStatus("");
              } else {
