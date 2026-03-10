@@ -22,6 +22,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState("");
+  const [pollCount, setPollCount] = useState(0);
   
   // Ref for polling interval to prevent memory leaks
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -53,9 +54,13 @@ export default function Home() {
     setIsLoading(true);
     setError("");
     setTranscript("");
-    setProcessingStatus("Initializing request...");
+    setPollCount(0);
+    setProcessingStatus("Fetching URL details...");
 
     try {
+      // Simulate checking DB message for a brief moment for better UX
+      setTimeout(() => setProcessingStatus("Checking Supabase cache..."), 800);
+      
       const response = await fetch("/api/transcribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -75,7 +80,7 @@ export default function Home() {
          setProcessingStatus("");
          return; // Ensure we stop here and don't try to poll
       } else if (data.status === "processing" && data.videoId) {
-         setProcessingStatus("Assigning job to background extraction worker...");
+         setProcessingStatus("Deploying background extraction worker...");
          startPolling(data.videoId);
       }
     } catch (err: any) {
@@ -108,7 +113,14 @@ export default function Home() {
                 setIsLoading(false);
                 setProcessingStatus("");
              } else {
-                setProcessingStatus("Worker is extracting captions... This usually takes 10-30 seconds.");
+                setPollCount(prev => {
+                    const nextCount = prev + 1;
+                    if (nextCount === 1) setProcessingStatus("Retrieving captions via yt-dlp...");
+                    else if (nextCount === 2) setProcessingStatus("Bypassing regional restrictions...");
+                    else if (nextCount === 3) setProcessingStatus("Formatting text output...");
+                    else setProcessingStatus("Worker is extracting captions... This usually takes 10-30 seconds.");
+                    return nextCount;
+                });
              }
          } catch(err) {
              // Let it retry next time
