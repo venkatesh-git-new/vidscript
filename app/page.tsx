@@ -62,9 +62,11 @@ export default function Home() {
       }
 
       if (data.status === "done" || data.status === "completed") {
+         // Instant hit from cache!
          setTranscript(data.transcript);
          setIsLoading(false);
          setProcessingStatus("");
+         return; // Ensure we stop here and don't try to poll
       } else if (data.status === "processing" && data.videoId) {
          setProcessingStatus("Attempting browser extraction...");
          
