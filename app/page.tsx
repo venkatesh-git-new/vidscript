@@ -70,9 +70,20 @@ export default function Home() {
          
          // 1. Try Browser Extraction First
          try {
-             const tracks = await getCaptionTracks(data.videoId);
-             const bestTrack = selectBestTrack(tracks);
-             const extractedText = await downloadTranscript(bestTrack.baseUrl);
+             // Use a simple timeout wrapper to ensure the browser extraction NEVER hangs indefinitely
+             const browserExtraction = async () => {
+                 const tracks = await getCaptionTracks(data.videoId);
+                 const bestTrack = selectBestTrack(tracks);
+                 const extractedText = await downloadTranscript(bestTrack.baseUrl);
+                 return extractedText;
+             };
+
+             const extractionPromise = browserExtraction();
+             const timeoutPromise = new Promise<string>((_, reject) => 
+                 setTimeout(() => reject(new Error("Browser extraction timeout")), 15000)
+             );
+
+             const extractedText = await Promise.race([extractionPromise, timeoutPromise]);
              
              if (extractedText) {
                  // Save it to the backend
@@ -92,7 +103,7 @@ export default function Home() {
          }
          
          // 2. Fallback to polling the worker
-         setProcessingStatus(data.message || "Generating transcript...");
+         setProcessingStatus("Generating transcript...");
          startPolling(data.videoId);
       }
     } catch (err: any) {
