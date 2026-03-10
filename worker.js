@@ -4,7 +4,7 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { YoutubeTranscript } = require('youtube-transcript');
+
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -45,23 +45,8 @@ async function processJob(job) {
         let transcriptText = "";
         let sourceUsed = "";
 
-        // Method 1: youtube-transcript
-        console.log(`[Worker] Attempting extraction with youtube-transcript for ${videoId}...`);
-        try {
-            const transcriptItems = await YoutubeTranscript.fetchTranscript(videoId);
-            if (transcriptItems && transcriptItems.length > 0) {
-                transcriptText = transcriptItems.map(item => item.text).join(" ").replace(/\n/g, ' ').trim();
-                sourceUsed = "youtube-transcript";
-                console.log(`[Worker] Extraction success using youtube-transcript for ${videoId}`);
-                return { transcriptText, sourceUsed }; // Return early
-            }
-        } catch (ytErr) {
-            console.log(`[Worker] Extraction failure using youtube-transcript: ${ytErr.message}`);
-        }
-
-        // Method 2: yt-dlp fallback
         console.log(`[Worker] Attempting extraction with yt-dlp for ${videoId}...`);
-            try {
+        try {
                 const ytDlpCmd = fs.existsSync(path.join(__dirname, 'yt-dlp.exe')) 
                     ? `"${path.join(__dirname, 'yt-dlp.exe')}"` 
                     : 'yt-dlp';

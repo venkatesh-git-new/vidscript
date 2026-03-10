@@ -2,10 +2,17 @@
 
 import { useState, useEffect, useRef } from "react";
 import { Copy, Download, Loader2, Youtube, FileText, Check, AlertCircle } from "lucide-react";
-import AdBanner from "@/components/AdBanner";
 import Script from "next/script"; // Assuming Turnstile via script tag
+import AdBanner from "@/components/AdBanner";
 
-import { extractVideoId, getCaptionTracks, selectBestTrack, downloadTranscript } from "@/utils/youtube-browser";
+/**
+ * Extracts Video ID and normalizes Shorts URLs
+ */
+function extractVideoId(url: string): string | null {
+    const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/i;
+    const match = url.match(regex);
+    return match ? match[1] : null;
+}
 
 export default function Home() {
   const [url, setUrl] = useState("");
@@ -68,43 +75,6 @@ export default function Home() {
          setProcessingStatus("");
          return; // Ensure we stop here and don't try to poll
       } else if (data.status === "processing" && data.videoId) {
-         setProcessingStatus("Attempting browser extraction...");
-         
-         // 1. Try Browser Extraction First
-         try {
-             // Use a simple timeout wrapper to ensure the browser extraction NEVER hangs indefinitely
-             const browserExtraction = async () => {
-                 const tracks = await getCaptionTracks(data.videoId);
-                 const bestTrack = selectBestTrack(tracks);
-                 const extractedText = await downloadTranscript(bestTrack.baseUrl);
-                 return extractedText;
-             };
-
-             const extractionPromise = browserExtraction();
-             const timeoutPromise = new Promise<string>((_, reject) => 
-                 setTimeout(() => reject(new Error("Browser extraction timeout")), 15000)
-             );
-
-             const extractedText = await Promise.race([extractionPromise, timeoutPromise]);
-             
-             if (extractedText) {
-                 // Save it to the backend
-                 await fetch("/api/save-transcript", {
-                     method: "POST",
-                     headers: { "Content-Type": "application/json" },
-                     body: JSON.stringify({ videoId: data.videoId, transcript: extractedText, source: "browser" })
-                 });
-                 
-                 setTranscript(extractedText);
-                 setIsLoading(false);
-                 setProcessingStatus("");
-                 return; // Stop the flow here
-             }
-         } catch (browserErr) {
-             console.warn("Browser extraction failed, falling back to worker polling:", browserErr);
-         }
-         
-         // 2. Fallback to polling the worker
          setProcessingStatus("Generating transcript...");
          startPolling(data.videoId);
       }

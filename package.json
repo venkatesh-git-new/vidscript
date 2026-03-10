@@ -19,7 +19,6 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "tailwind-merge": "^3.5.0",
-    "youtube-transcript": "^1.2.1",
     "yt-transcript": "^0.0.2"
   },
   "devDependencies": {
