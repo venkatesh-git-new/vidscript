@@ -75,7 +75,7 @@ export default function Home() {
          setProcessingStatus("");
          return; // Ensure we stop here and don't try to poll
       } else if (data.status === "processing" && data.videoId) {
-         setProcessingStatus("Generating transcript...");
+         setProcessingStatus("Assigning job to background extraction worker...");
          startPolling(data.videoId);
       }
     } catch (err: any) {
@@ -108,7 +108,7 @@ export default function Home() {
                 setIsLoading(false);
                 setProcessingStatus("");
              } else {
-                setProcessingStatus("Still processing... This may take up to a minute.");
+                setProcessingStatus("Worker is extracting captions... This usually takes 10-30 seconds.");
              }
          } catch(err) {
              // Let it retry next time
