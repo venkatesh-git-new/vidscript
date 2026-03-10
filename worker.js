@@ -51,9 +51,10 @@ async function processJob(job) {
                     ? `"${path.join(__dirname, 'yt-dlp.exe')}"` 
                     : 'yt-dlp';
 
+                const cookiesPath = path.join(__dirname, 'cookies.txt');
                 // Check subs first
                 try {
-                    execSync(`${ytDlpCmd} --list-subs "${url}"`, { stdio: 'pipe' });
+                    execSync(`${ytDlpCmd} --cookies "${cookiesPath}" --list-subs "${url}"`, { stdio: 'pipe' });
                 } catch (e) {
                     const stderr = e.stderr ? e.stderr.toString() : "";
                     if (stderr.includes("has no subtitles")) {
@@ -63,6 +64,7 @@ async function processJob(job) {
 
                 // Fetch JSON3 subs
                 const args = [
+                    `--cookies "${cookiesPath}"`,
                     `--write-subs`,
                     `--write-auto-subs`,
                     `--sub-langs en,en-US,en-GB`,
