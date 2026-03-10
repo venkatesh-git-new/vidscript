@@ -53,14 +53,14 @@ async function processJob(job) {
                 transcriptText = transcriptItems.map(item => item.text).join(" ").replace(/\n/g, ' ').trim();
                 sourceUsed = "youtube-transcript";
                 console.log(`[Worker] Extraction success using youtube-transcript for ${videoId}`);
+                return { transcriptText, sourceUsed }; // Return early
             }
         } catch (ytErr) {
             console.log(`[Worker] Extraction failure using youtube-transcript: ${ytErr.message}`);
         }
 
         // Method 2: yt-dlp fallback
-        if (!transcriptText) {
-            console.log(`[Worker] Attempting extraction with yt-dlp for ${videoId}...`);
+        console.log(`[Worker] Attempting extraction with yt-dlp for ${videoId}...`);
             try {
                 const ytDlpCmd = fs.existsSync(path.join(__dirname, 'yt-dlp.exe')) 
                     ? `"${path.join(__dirname, 'yt-dlp.exe')}"` 
@@ -127,7 +127,6 @@ async function processJob(job) {
             } catch (ytDlpErr) {
                 console.log(`[Worker] Extraction failure using yt-dlp: ${ytDlpErr.message}`);
             }
-        }
 
         if (!transcriptText || !transcriptText.trim()) {
             throw new Error("All extraction methods failed or parsed transcript is empty.");
@@ -184,14 +183,23 @@ async function loop() {
 // --- RENDER WEB SERVICE WORKAROUND ---
 // Render requires Web Services to bind to a port, even if they are just background workers.
 const http = require('http');
-const port = process.env.PORT || 10000;
-http.createServer((req, res) => {
+// Try to bind to PORT, fallback to picking any available port (0) if running locally alongside dev servers
+const port = process.env.PORT || 0;
+const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('Worker is active\n');
-}).listen(port, () => {
-    console.log(`[Worker] Dummy web server listening on port ${port}`);
+});
+
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE') {
+    console.log(`[Worker] Port ${port} is in use, assuming local dev and ignoring dummy server.`);
+  }
+});
+
+server.listen(port, () => {
+    console.log(`[Worker] Dummy web server listening on port ${server.address().port}`);
 });
 // -------------------------------------
 
-console.log("[Worker] Starting Render worker...");
+console.log("[Worker] Starting Render worker loop...");
 loop();
