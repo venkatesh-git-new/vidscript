@@ -54,7 +54,7 @@ async function processJob(job) {
                 const cookiesPath = path.join(__dirname, 'cookies.txt');
                 // Check subs first
                 try {
-                    execSync(`${ytDlpCmd} --cookies "${cookiesPath}" --list-subs "${url}"`, { stdio: 'pipe' });
+                    execSync(`${ytDlpCmd} --cookies "${cookiesPath}" --list-subs "${url}"`, { stdio: 'pipe', windowsHide: true });
                 } catch (e) {
                     const stderr = e.stderr ? e.stderr.toString() : "";
                     if (stderr.includes("has no subtitles")) {
@@ -76,7 +76,7 @@ async function processJob(job) {
                     `"${url}"`
                 ].join(" ");
 
-                execSync(`${ytDlpCmd} ${args}`, { stdio: 'pipe' });
+                execSync(`${ytDlpCmd} ${args}`, { stdio: 'pipe', windowsHide: true });
 
                 const matchingFiles = fs.readdirSync(tempDir).filter(f => f.startsWith(`sub_${videoId}_${timestamp}`) && f.endsWith(".json3"));
                 
@@ -158,6 +158,7 @@ async function loop() {
         console.error("[Worker] Error fetching jobs:", error);
     } else if (jobs && jobs.length > 0) {
         const job = jobs[0];
+        console.log(`[Worker] Found pending job: ${job.id}`);
         
         // Try to lock it. Racy but good enough for a single worker.
         // For multiple workers, use raw SQL with FOR UPDATE SKIP LOCKED.
